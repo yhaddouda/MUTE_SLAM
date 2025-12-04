@@ -83,8 +83,7 @@ class Mapper(object):
         self.keyframe_list = []
         self.frame_reader = get_dataset(cfg, args, self.scale, device=self.device)
         self.n_img = len(self.frame_reader)
-        self.frame_loader = DataLoader(self.frame_reader, batch_size=1, num_workers=1, pin_memory=True,
-                                       prefetch_factor=2, sampler=SeqSampler(self.n_img, self.every_frame))
+        self.frame_loader = DataLoader(self.frame_reader, batch_size=1, num_workers=0, pin_memory=True, sampler=SeqSampler(self.n_img, self.every_frame))
 
         self.visualizer = Frame_Visualizer(freq=cfg['mapping']['vis_freq'], inside_freq=cfg['mapping']['vis_inside_freq'],
                                            vis_dir=os.path.join(self.output, 'mapping_vis'), renderer=self.renderer,
@@ -220,9 +219,11 @@ class Mapper(object):
             optimize_frame = []
         else:
             if self.keyframe_selection_method == 'global':
-                optimize_frame = random_select(len(self.keyframe_dict)-2, self.mapping_window_size-1)
+                with torch.cuda.nvtx.range("keyframe_selection_global"):
+                    optimize_frame = random_select(len(self.keyframe_dict)-2, self.mapping_window_size-1)
             elif self.keyframe_selection_method == 'overlap':
-                optimize_frame = self.keyframe_selection_overlap(cur_gt_color, cur_gt_depth, cur_c2w, self.mapping_window_size-1)
+                with torch.cuda.nvtx.range("keyframe_selection_overlap"):
+                    optimize_frame = self.keyframe_selection_overlap(cur_gt_color, cur_gt_depth, cur_c2w, self.mapping_window_size-1)
 
         # add the last two keyframes and the current frame(use -1 to denote)
         if len(keyframe_list) > 1:
@@ -298,32 +299,35 @@ class Mapper(object):
                 c2ws_ = torch.cat([c2ws[0:1], cam_pose_to_matrix(cam_poses)], dim=0)
             else:
                 c2ws_ = c2ws
-
-            batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(
+            with torch.cuda.nvtx.range("get_samples"):
+                batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(
                 0, H, 0, W, pixs_per_image, H, W, fx, fy, cx, cy, c2ws_, gt_depths, gt_colors, device)
-
-            depth_mask = (batch_gt_depth > 0)
-            batch_gt_depth = batch_gt_depth[depth_mask]
-            batch_gt_color = batch_gt_color[depth_mask]
-            batch_rays_o = batch_rays_o[depth_mask]
-            batch_rays_d = batch_rays_d[depth_mask]
-
-            depth, color, sdf, z_vals, inmap_mask = self.renderer.render_batch_ray(self.submap_list, self.decoders, batch_rays_d,
+            with torch.cuda.nvtx.range("filter_valid_depth_rays"):
+                depth_mask = (batch_gt_depth > 0)
+                batch_gt_depth = batch_gt_depth[depth_mask]
+                batch_gt_color = batch_gt_color[depth_mask]
+                batch_rays_o = batch_rays_o[depth_mask]
+                batch_rays_d = batch_rays_d[depth_mask]
+            with torch.cuda.nvtx.range("render_batch_ray_m"):
+                depth, color, sdf, z_vals, inmap_mask = self.renderer.render_batch_ray(self.submap_list, self.decoders, batch_rays_d,
                                                                        batch_rays_o, device, self.truncation,
                                                                        gt_depth=batch_gt_depth)
-            # SDF losses
-            loss = self.sdf_losses(sdf, z_vals, batch_gt_depth[inmap_mask])
+            with torch.cuda.nvtx.range("Losses_m"):
+                # SDF losses
+                loss = self.sdf_losses(sdf, z_vals, batch_gt_depth[inmap_mask])
 
-            # Color loss
-            loss = loss + self.w_color * torch.square(batch_gt_color[inmap_mask] - color).mean()
+                # Color loss
+                loss = loss + self.w_color * torch.square(batch_gt_color[inmap_mask] - color).mean()
 
-            # Depth loss
-            loss = loss + self.w_depth * torch.square(batch_gt_depth[inmap_mask] - depth).mean()
+                # Depth loss
+                loss = loss + self.w_depth * torch.square(batch_gt_depth[inmap_mask] - depth).mean()
 
             #print('mapping_loss', loss)
             optimizer.zero_grad()
-            loss.backward(retain_graph=False)
-            optimizer.step()
+            with torch.cuda.nvtx.range("backward_m"):
+                loss.backward(retain_graph=False)
+            with torch.cuda.nvtx.range("optimizer_step_m"):  
+                optimizer.step()
 
         if self.joint_opt:
             # put the updated camera poses back
@@ -366,8 +370,9 @@ class Mapper(object):
         gt_c2ws = []
         for frame in optimize_frame:
             # the oldest frame should be fixed to avoid drifting
-            gt_depths.append(keyframe_dict[frame]['depth'].to(device))
-            gt_colors.append(keyframe_dict[frame]['color'].to(device))
+            with torch.cuda.nvtx.range("cpu_to_gpu_ba"):
+                gt_depths.append(keyframe_dict[frame]['depth'].to(device))
+                gt_colors.append(keyframe_dict[frame]['color'].to(device))
             c2ws.append(keyframe_dict[frame]['est_c2w'])
             gt_c2ws.append(keyframe_dict[frame]['gt_c2w'])
 
@@ -402,8 +407,8 @@ class Mapper(object):
         for i in range(10):
             ## We fix the oldest c2w to avoid drifting
             c2ws_ = torch.cat([c2ws[0:1], cam_pose_to_matrix(cam_poses)], dim=0)
-
-            batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(
+            with torch.cuda.nvtx.range("get_samples_ba"):
+                batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(
                 0, H, 0, W, pixs_per_image, H, W, fx, fy, cx, cy, c2ws_, gt_depths, gt_colors, device)
 
             depth_mask = (batch_gt_depth > 0)
@@ -411,23 +416,28 @@ class Mapper(object):
             batch_gt_color = batch_gt_color[depth_mask]
             batch_rays_o = batch_rays_o[depth_mask]
             batch_rays_d = batch_rays_d[depth_mask]
-            depth, color, sdf, z_vals, inmap_mask = self.renderer.render_batch_ray(self.submap_list, self.decoders,
+            with torch.cuda.nvtx.range("render_batch_ray_ba"):
+                depth, color, sdf, z_vals, inmap_mask = self.renderer.render_batch_ray(self.submap_list, self.decoders,
                                                                                     batch_rays_d,
                                                                                     batch_rays_o, device,
                                                                                     self.truncation,
                                                                                     gt_depth=batch_gt_depth)
-            # SDF losses
-            loss = self.sdf_losses(sdf, z_vals, batch_gt_depth[inmap_mask])
+            
+            with torch.cuda.nvtx.range("Losses_ba"):
+                # SDF losses
+                loss = self.sdf_losses(sdf, z_vals, batch_gt_depth[inmap_mask])
 
-            # Color loss
-            loss = loss + self.w_color * torch.square(batch_gt_color[inmap_mask] - color).mean()
+                # Color loss
+                loss = loss + self.w_color * torch.square(batch_gt_color[inmap_mask] - color).mean()
 
-            # Depth loss
-            loss = loss + self.w_depth * torch.square(batch_gt_depth[inmap_mask] - depth).mean()
+                # Depth loss
+                loss = loss + self.w_depth * torch.square(batch_gt_depth[inmap_mask] - depth).mean()
 
             optimizer.zero_grad()
-            loss.backward(retain_graph=False)
-            optimizer.step()
+            with torch.cuda.nvtx.range("backward_ba"):
+                loss.backward(retain_graph=False)
+            with torch.cuda.nvtx.range("optimizer_ba"):
+                optimizer.step()
 
         # put the updated camera poses back
         optimized_c2ws = cam_pose_to_matrix(cam_poses.detach())
@@ -468,126 +478,134 @@ class Mapper(object):
                 print(Style.RESET_ALL)
 
             _, gt_color, gt_depth, gt_c2w = next(data_iterator)
-            gt_color = gt_color.squeeze(0).to(self.device, non_blocking=True)
-            gt_depth = gt_depth.squeeze(0).to(self.device, non_blocking=True)
-            gt_c2w = gt_c2w.squeeze(0).to(self.device, non_blocking=True)
+            with torch.cuda.nvtx.range("cpu_to_gpu_m"):
+                gt_color = gt_color.squeeze(0).to(self.device, non_blocking=True)
+                gt_depth = gt_depth.squeeze(0).to(self.device, non_blocking=True)
+                gt_c2w = gt_c2w.squeeze(0).to(self.device, non_blocking=True)
 
             cur_c2w = self.estimate_c2w_list[idx]
             if not init_phase:
-                lr_factor = cfg['mapping']['lr_factor']
-                iters = cfg['mapping']['iters']
+                with torch.cuda.nvtx.range("init_phase"):
+                    lr_factor = cfg['mapping']['lr_factor']
+                    iters = cfg['mapping']['iters']
 
-                pts = get_sample_points(self.H, self.W, self.fx, self.fy, self.cx, self.cy, cur_c2w, 1000,
-                                        gt_depth, self.device)
-                center = torch.mean(pts, dim=0)
-                square_dis = torch.sum(torch.square(pts[..., :] - center[None, :]), dim=1)
-                dis_mask = (square_dis < 10*torch.sum(square_dis)/square_dis.shape[0])
-                pts = torch.cat([pts[dis_mask], cur_c2w[None, :3, -1]], dim=0)
-                p_shape = pts.shape
+                    with torch.cuda.nvtx.range("get_sample_points"):
+                        pts = get_sample_points(self.H, self.W, self.fx, self.fy, self.cx, self.cy, cur_c2w, 1000,
+                                                gt_depth, self.device)
+                    center = torch.mean(pts, dim=0)
+                    square_dis = torch.sum(torch.square(pts[..., :] - center[None, :]), dim=1)
+                    dis_mask = (square_dis < 10*torch.sum(square_dis)/square_dis.shape[0])
+                    pts = torch.cat([pts[dis_mask], cur_c2w[None, :3, -1]], dim=0)
+                    p_shape = pts.shape
 
-                for submap in self.submap_list:
-                    pts_mask = torch.bitwise_and((pts > submap.boundary[0]).all(dim=-1),
-                                                 (pts < submap.boundary[1]).all(dim=-1))
-                    pts = pts[~pts_mask]
-                if pts.shape[0]/p_shape[0] > self.map_allo_threshold:
-                    if free_pts is not None:
-                        free_pts = torch.cat([free_pts, pts], dim=0)
+                    for submap in self.submap_list:
+                        pts_mask = torch.bitwise_and((pts > submap.boundary[0]).all(dim=-1),
+                                                    (pts < submap.boundary[1]).all(dim=-1))
+                        pts = pts[~pts_mask]
+                    if pts.shape[0]/p_shape[0] > self.map_allo_threshold:
+                        if free_pts is not None:
+                            free_pts = torch.cat([free_pts, pts], dim=0)
+                            pts_max, _ = torch.max(free_pts, dim=0)
+                            pts_min, _ = torch.min(free_pts, dim=0)
+                            free_pts = None
+                        else:
+                            pts_max, _ = torch.max(pts, dim=0)
+                            pts_min, _ = torch.min(pts, dim=0)
+                        boundary = torch.stack([pts_min-self.map_expand_size, pts_max+self.map_expand_size], dim=0)
+                        cur_submap = SubMap(device=self.device, boundary=boundary, use_tcnn=self.use_tcnn,
+                                                        encoding_type=self.encoding_type,
+                                                        input_dim=2,
+                                                        num_levels=self.encoding_levels,
+                                                        level_dim=self.per_level_feature_dim,
+                                                        base_resolution=self.base_resolution)
+                        self.submap_list.append(cur_submap)
+                        state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
+                        self.submap_dict_list.append(state_dict_cpu)
+                        self.submap_bound_list.append(boundary.to('cpu'))
+                        self.keyframe_list.append(idx)
+                        self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
+                                                'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
+                        create_submap = 1
+                    elif pts.shape[0] / p_shape[0] > self.map_allo_threshold / 4:
+                        if free_pts is None:
+                            free_pts = pts
+                        else:
+                            free_pts = torch.cat([free_pts, pts], dim=0)
+                    elif free_pts is not None and free_pts.shape[0] > 250:
                         pts_max, _ = torch.max(free_pts, dim=0)
                         pts_min, _ = torch.min(free_pts, dim=0)
                         free_pts = None
-                    else:
-                        pts_max, _ = torch.max(pts, dim=0)
-                        pts_min, _ = torch.min(pts, dim=0)
-                    boundary = torch.stack([pts_min-self.map_expand_size, pts_max+self.map_expand_size], dim=0)
-                    cur_submap = SubMap(device=self.device, boundary=boundary, use_tcnn=self.use_tcnn,
-                                                    encoding_type=self.encoding_type,
-                                                    input_dim=2,
-                                                    num_levels=self.encoding_levels,
-                                                    level_dim=self.per_level_feature_dim,
-                                                    base_resolution=self.base_resolution)
-                    self.submap_list.append(cur_submap)
-                    state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
-                    self.submap_dict_list.append(state_dict_cpu)
-                    self.submap_bound_list.append(boundary.to('cpu'))
-                    self.keyframe_list.append(idx)
-                    self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
-                                               'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
-                    create_submap = 1
-                elif pts.shape[0] / p_shape[0] > self.map_allo_threshold / 4:
-                    if free_pts is None:
-                        free_pts = pts
-                    else:
-                        free_pts = torch.cat([free_pts, pts], dim=0)
-                elif free_pts is not None and free_pts.shape[0] > 250:
-                    pts_max, _ = torch.max(free_pts, dim=0)
-                    pts_min, _ = torch.min(free_pts, dim=0)
-                    free_pts = None
-                    boundary = torch.stack([pts_min-self.map_expand_size, pts_max+self.map_expand_size], dim=0)
-                    cur_submap = SubMap(device=self.device, boundary=boundary, use_tcnn=self.use_tcnn,
-                                                    encoding_type=self.encoding_type,
-                                                    input_dim=2,
-                                                    num_levels=self.encoding_levels,
-                                                    level_dim=self.per_level_feature_dim,
-                                                    base_resolution=self.base_resolution)
-                    self.submap_list.append(cur_submap)
-                    state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
-                    self.submap_dict_list.append(state_dict_cpu)
-                    self.submap_bound_list.append(boundary.to('cpu'))
-                    self.keyframe_list.append(idx)
-                    self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
-                                               'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
-                    create_submap = 1
+                        boundary = torch.stack([pts_min-self.map_expand_size, pts_max+self.map_expand_size], dim=0)
+                        cur_submap = SubMap(device=self.device, boundary=boundary, use_tcnn=self.use_tcnn,
+                                                        encoding_type=self.encoding_type,
+                                                        input_dim=2,
+                                                        num_levels=self.encoding_levels,
+                                                        level_dim=self.per_level_feature_dim,
+                                                        base_resolution=self.base_resolution)
+                        self.submap_list.append(cur_submap)
+                        state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
+                        self.submap_dict_list.append(state_dict_cpu)
+                        self.submap_bound_list.append(boundary.to('cpu'))
+                        self.keyframe_list.append(idx)
+                        self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
+                                                'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
+                        create_submap = 1
 
             else:
-                lr_factor = cfg['mapping']['lr_first_factor']
-                iters = cfg['mapping']['iters_first']
+                with torch.cuda.nvtx.range("The rest"):
+                    lr_factor = cfg['mapping']['lr_first_factor']
+                    iters = cfg['mapping']['iters_first']
 
-                #compute the boundary of the first sub_map
-                pts = get_sample_points(self.H, self.W, self.fx, self.fy, self.cx, self.cy, cur_c2w, 180,
-                                        gt_depth, self.device)
-                center = torch.mean(pts, dim=0)
-                square_dis = torch.sum(torch.square(pts[..., :] - center[None, :]), dim=-1)
-                dis_mask = (square_dis < 10*torch.sum(square_dis)/square_dis.shape[0])
-                pts = torch.cat([pts[dis_mask], cur_c2w[None, :3, -1]], dim=0)
-                pts_max, _ = torch.max(pts, dim=0)
-                pts_min, _ = torch.min(pts, dim=0)
-                boundary = torch.stack([pts_min-self.map_expand_size*1.5, pts_max+self.map_expand_size*1.5], dim=0)
-                self.submap_list.append(SubMap(device=self.device, boundary=boundary, use_tcnn=self.use_tcnn,
-                                                encoding_type=self.encoding_type,
-                                                input_dim=2,
-                                                num_levels=self.encoding_levels,
-                                                level_dim=self.per_level_feature_dim,
-                                                base_resolution=self.base_resolution))
-                state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
-                self.submap_dict_list.append(state_dict_cpu)
-                self.submap_bound_list.append(boundary.to('cpu'))
-                self.keyframe_list.append(idx)
-                self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
-                                           'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
-                create_submap = 1
+                    #compute the boundary of the first sub_map
+                    pts = get_sample_points(self.H, self.W, self.fx, self.fy, self.cx, self.cy, cur_c2w, 180,
+                                            gt_depth, self.device)
+                    center = torch.mean(pts, dim=0)
+                    square_dis = torch.sum(torch.square(pts[..., :] - center[None, :]), dim=-1)
+                    dis_mask = (square_dis < 10*torch.sum(square_dis)/square_dis.shape[0])
+                    pts = torch.cat([pts[dis_mask], cur_c2w[None, :3, -1]], dim=0)
+                    pts_max, _ = torch.max(pts, dim=0)
+                    pts_min, _ = torch.min(pts, dim=0)
+                    boundary = torch.stack([pts_min-self.map_expand_size*1.5, pts_max+self.map_expand_size*1.5], dim=0)
+                    self.submap_list.append(SubMap(device=self.device, boundary=boundary, use_tcnn=self.use_tcnn,
+                                                    encoding_type=self.encoding_type,
+                                                    input_dim=2,
+                                                    num_levels=self.encoding_levels,
+                                                    level_dim=self.per_level_feature_dim,
+                                                    base_resolution=self.base_resolution))
+                    state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
+                    self.submap_dict_list.append(state_dict_cpu)
+                    self.submap_bound_list.append(boundary.to('cpu'))
+                    self.keyframe_list.append(idx)
+                    self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
+                                            'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
+                    create_submap = 1
 
-            # Deciding if camera poses should be jointly optimized
-            self.joint_opt = (len(self.keyframe_list) > 4) and cfg['mapping']['joint_opt']
-            cur_c2w = self.optimize_mapping(iters, lr_factor, idx, gt_color, gt_depth, gt_c2w,
-                                            self.keyframe_dict, self.keyframe_list, cur_c2w)
-            if self.joint_opt:
-                self.estimate_c2w_list[idx] = cur_c2w
+            with torch.cuda.nvtx.range(f"optimize_mapping[frame={int(idx)}]"):
+                # Deciding if camera poses should be jointly optimized
+                self.joint_opt = (len(self.keyframe_list) > 4) and cfg['mapping']['joint_opt']
+                cur_c2w = self.optimize_mapping(iters, lr_factor, idx, gt_color, gt_depth, gt_c2w,
+                                                self.keyframe_dict, self.keyframe_list, cur_c2w)
+                if self.joint_opt:
+                    self.estimate_c2w_list[idx] = cur_c2w
 
-            # add new frame to keyframe set
-            if create_submap == 0 and idx % self.keyframe_every == 0:
-                self.keyframe_list.append(idx)
-                self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
-                                           'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
+            with torch.cuda.nvtx.range("add keyframe"):
+                # add new frame to keyframe set
+                if create_submap == 0 and idx % self.keyframe_every == 0:
+                    self.keyframe_list.append(idx)
+                    self.keyframe_dict.append({'gt_c2w': gt_c2w, 'idx': idx, 'color': gt_color.to(self.keyframe_device),
+                                            'depth': gt_depth.to(self.keyframe_device), 'est_c2w': cur_c2w.clone()})
 
 
             init_phase = False
             if self.BA and len(self.keyframe_list) > 40 and idx % 20 == 0:
-                self.bundle_adjustment(self.keyframe_dict, lr_factor)
+                with torch.cuda.nvtx.range("bundle_adjustment"):
+                    self.bundle_adjustment(self.keyframe_dict, lr_factor)
 
             self.mapping_first_frame[0] = 1     # mapping of first frame is done, can begin tracking
 
             if ((not (idx == 0 and self.no_log_on_first_frame)) and idx % self.ckpt_freq == 0) or idx == self.n_img-1:
-                self.logger.log(idx, self.keyframe_list)
+                with torch.cuda.nvtx.range("logger"):
+                    self.logger.log(idx, self.keyframe_list)
 
             for i, submap in enumerate(self.submap_list):
                 self.submap_dict_list[i] = {key: value.to('cpu') for key, value in submap.state_dict().items()}
@@ -598,7 +616,8 @@ class Mapper(object):
             if (idx % self.mesh_freq == 0) and (not (idx == 0 and self.no_mesh_on_first_frame)):
                 mesh_out_file = f'{self.output}/mesh/{idx:05d}_mesh.ply'
                 self.mesher.get_mesh(mesh_out_file, self.submap_list, self.decoders, self.keyframe_dict, self.device)
-                cull_mesh(mesh_out_file, self.cfg, self.args, self.device, estimate_c2w_list=self.estimate_c2w_list[:idx+1])
+                with torch.cuda.nvtx.range("cull_mesh"):
+                    cull_mesh(mesh_out_file, self.cfg, self.args, self.device, estimate_c2w_list=self.estimate_c2w_list[:idx+1])
 
             if idx == self.n_img-1:
                 for i, submap in enumerate(self.submap_list):

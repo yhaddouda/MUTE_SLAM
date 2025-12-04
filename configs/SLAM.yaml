@@ -4,7 +4,7 @@ device: "cuda:0"
 #keyframe_device: "cuda:0" ## Change this to "cpu" to reduce GPU memory usage
 keyframe_device: "cpu"
 encoding:
-  tcnn: False
+  tcnn: True
   type: HashGrid
   n_levels: 16
   base_resolution: 16

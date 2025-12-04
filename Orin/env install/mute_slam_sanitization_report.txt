@@ -1,0 +1,21 @@
+[2025-11-10 09:38:39] Jetson/Orin sanitization of missing dependency lists
+- Source backups: mute_slam_missing_conda.txt.bak, mute_slam_missing_pip.txt.bak
+- Edited files:   mute_slam_missing_conda.txt, mute_slam_missing_pip.txt
+
+Removed from CONDA list:
+  - cudatoolkit: Jetson provides system CUDA via JetPack; conda cudatoolkit conflicts.
+  - ld-impl-linux-64: x86_64-only loader package; not available on aarch64/Jetson.
+  - llvm-openmp: Often unavailable/unnecessary on aarch64; OpenMP is via libgomp (GCC).
+  - mkl-random: Intel MKL stack (x86-focused). Use OpenBLAS-backed numpy/scipy on Jetson.
+  - python-abi: virtual/meta spec; not installed directly and confuses solver.
+  - pytorch: Install NVIDIA’s Jetson PyTorch wheels via pip (matching JetPack), not conda.
+  - torchaudio: Same as PyTorch; use NVIDIA’s wheels (or build) for Jetson instead of conda.
+
+Removed from PIP list:
+  - opencv-python: Prefer conda-forge 'opencv' (or system OpenCV) on Jetson; pip wheel is spotty on aarch64.
+  - rtree: Prefer conda-forge 'rtree' since it bundles libspatialindex correctly on Jetson.
+
+Notes:
+  * Keep installing NumPy/SciPy from conda-forge (OpenBLAS-backed) on Jetson.
+  * Install PyTorch/TorchVision/TorchAudio using NVIDIA’s Jetson wheel index matching your JetPack.
+  * Prefer conda-forge 'opencv' over pip 'opencv-python' on aarch64.

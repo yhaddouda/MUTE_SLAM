@@ -81,12 +81,15 @@ class Decoders(nn.Module):
             #pre_mask = torch.logical_or(pre_mask, pts_mask)
             pre_mask = pts_mask
             indices_list.append(index[pts_mask])
-            if self.use_tcnn:
-                p_nor = normalize_3d_coordinate_to_unit(pts[pts_mask], submap.boundary)
-            else:
-                p_nor = normalize_3d_coordinate(pts[pts_mask], submap.boundary)
-            c_feat_list.append(self.sample_plane_feature(p_nor, submap.c_planes_xy, submap.c_planes_xz, submap.c_planes_yz))
-            feat_list.append(self.sample_plane_feature(p_nor, submap.planes_xy, submap.planes_xz, submap.planes_yz))
+            with torch.cuda.nvtx.range("normalize coords"):
+                if self.use_tcnn:
+                    p_nor = normalize_3d_coordinate_to_unit(pts[pts_mask], submap.boundary)
+                else:
+                    p_nor = normalize_3d_coordinate(pts[pts_mask], submap.boundary)
+            with torch.cuda.nvtx.range("query color feature"):
+                c_feat_list.append(self.sample_plane_feature(p_nor, submap.c_planes_xy, submap.c_planes_xz, submap.c_planes_yz))
+            with torch.cuda.nvtx.range("query geometry feature"):
+                feat_list.append(self.sample_plane_feature(p_nor, submap.planes_xy, submap.planes_xz, submap.planes_yz))
         feat_all = torch.zeros((pts.shape[0], feat_list[0].shape[1]), device=self.device)
         c_feat_all = torch.zeros((pts.shape[0], c_feat_list[0].shape[1]), device=self.device)
 
@@ -199,12 +202,16 @@ class Decoders(nn.Module):
         """
         p_shape = p.shape
         p = p.reshape(-1, 3)
-        features, c_features = self.get_feature_from_points(p, submap_list)
+        with torch.cuda.nvtx.range("get_features_from_points"):
+            features, c_features = self.get_feature_from_points(p, submap_list)
 
-        sdf = self.get_raw_sdf(features)
-        rgb = self.get_raw_rgb(c_features)
+        with torch.cuda.nvtx.range("sdf decoder"):
+            sdf = self.get_raw_sdf(features)
+        with torch.cuda.nvtx.range("rgb decoder"):
+            rgb = self.get_raw_rgb(c_features)
 
-        raw = torch.cat([rgb, sdf.unsqueeze(-1)], dim=-1)
-        raw = raw.reshape(*p_shape[:-1], -1)
+        with torch.cuda.nvtx.range("tensor ops"):
+            raw = torch.cat([rgb, sdf.unsqueeze(-1)], dim=-1)
+            raw = raw.reshape(*p_shape[:-1], -1)
 
         return raw

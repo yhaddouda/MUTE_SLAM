@@ -60,33 +60,35 @@ class Renderer(object):
         near = 0.
         t_vals_uni = torch.linspace(0., 1., steps=n_stratified, device=device)
         t_vals_surface = torch.linspace(0., 1., steps=n_importance, device=device)
+        with torch.cuda.nvtx.range("Sampling"):
+            ### pixels with gt depth:
+            gt_depth = gt_depth.reshape(-1, 1)
 
-        ### pixels with gt depth:
-        gt_depth = gt_depth.reshape(-1, 1)
+            ## Sampling points around the gt depth (surface)
+            gt_depth_surface = gt_depth.expand(-1, n_importance)
+            ## in the range of gt_depth +-1.5 truncation, a uniform sampling
+            z_vals_surface = gt_depth_surface - (1.5 * truncation) + (3 * truncation * t_vals_surface)
 
-        ## Sampling points around the gt depth (surface)
-        gt_depth_surface = gt_depth.expand(-1, n_importance)
-        ## in the range of gt_depth +-1.5 truncation, a uniform sampling
-        z_vals_surface = gt_depth_surface - (1.5 * truncation) + (3 * truncation * t_vals_surface)
+            gt_depth_free = gt_depth.expand(-1, n_stratified)
+            ## in the range of 1.2*gt_depth, a uniform sampling
+            z_vals_free = near + 1.2 * gt_depth_free * t_vals_uni
 
-        gt_depth_free = gt_depth.expand(-1, n_stratified)
-        ## in the range of 1.2*gt_depth, a uniform sampling
-        z_vals_free = near + 1.2 * gt_depth_free * t_vals_uni
-
-        z_vals_end = z_vals_free[..., -1]
-        pts_end = rays_o + rays_d * z_vals_end[..., None]
-        inmap_mask = torch.ones(pts_end.shape[0], dtype=torch.bool, device=device)
+            z_vals_end = z_vals_free[..., -1]
+            pts_end = rays_o + rays_d * z_vals_end[..., None]
+            inmap_mask = torch.ones(pts_end.shape[0], dtype=torch.bool, device=device)
 
         ## filter out rays that end outside all current sub_maps
-        for submap in submap_list:
-            cur_mask = torch.bitwise_and((pts_end > submap.boundary[0]).all(-1),
-                                           (pts_end < submap.boundary[1]).all(dim=-1))
-            inmap_mask = torch.bitwise_or(inmap_mask, cur_mask)
+        with torch.cuda.nvtx.range("filter rays"):
+            for submap in submap_list:
+                cur_mask = torch.bitwise_and((pts_end > submap.boundary[0]).all(-1),
+                                            (pts_end < submap.boundary[1]).all(dim=-1))
+                inmap_mask = torch.bitwise_or(inmap_mask, cur_mask)
+        with torch.cuda.nvtx.range("sort z_vals"):
+            z_vals, _ = torch.sort(torch.cat([z_vals_free, z_vals_surface], dim=-1), dim=-1)
 
-        z_vals, _ = torch.sort(torch.cat([z_vals_free, z_vals_surface], dim=-1), dim=-1)
-
-        if self.perturb:
-            z_vals = self.perturbation(z_vals)
+        with torch.cuda.nvtx.range("perturbation"):
+            if self.perturb:
+                z_vals = self.perturbation(z_vals)
 
         z_vals = z_vals[inmap_mask]
         rays_o = rays_o[inmap_mask]
@@ -94,14 +96,16 @@ class Renderer(object):
 
         pts = rays_o[..., None, :] + rays_d[..., None, :] * \
               z_vals[..., :, None]  # [n_rays, n_stratified+n_importance, 3]
+        with torch.cuda.nvtx.range("submaps+decoders"):
+            raw = decoders(pts, submap_list)  # [n_rays, n_stratified+n_importance, 4]
+        with torch.cuda.nvtx.range("VR"):
+            with torch.cuda.nvtx.range("sdf2alpha"):
+                alpha = self.sdf2alpha(raw[..., -1], decoders.beta)
+            weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1), device=device)
+                                                    , (1. - alpha + 1e-10)], -1), -1)[:, :-1]  # [n_rays, n_stratified+n_importance]
 
-        raw = decoders(pts, submap_list)  # [n_rays, n_stratified+n_importance, 4]
-        alpha = self.sdf2alpha(raw[..., -1], decoders.beta)
-        weights = alpha * torch.cumprod(torch.cat([torch.ones((alpha.shape[0], 1), device=device)
-                                                , (1. - alpha + 1e-10)], -1), -1)[:, :-1]  # [n_rays, n_stratified+n_importance]
-
-        rendered_rgb = torch.sum(weights[..., None] * raw[..., :3], -2)
-        rendered_depth = torch.sum(weights * z_vals, -1)
+            rendered_rgb = torch.sum(weights[..., None] * raw[..., :3], -2)
+            rendered_depth = torch.sum(weights * z_vals, -1)
 
         return rendered_depth, rendered_rgb, raw[..., -1], z_vals, inmap_mask
 

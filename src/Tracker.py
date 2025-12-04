@@ -69,7 +69,7 @@ class Tracker(object):
         self.frame_reader = get_dataset(cfg, args, self.scale, device=self.device)
         self.n_img = len(self.frame_reader)
         self.frame_loader = DataLoader(self.frame_reader, batch_size=1, shuffle=False,
-                                       num_workers=1, pin_memory=True, prefetch_factor=2)
+                                       num_workers=0, pin_memory=True)
 
         self.visualizer = Frame_Visualizer(freq=cfg['tracking']['vis_freq'], inside_freq=cfg['tracking']['vis_inside_freq'],
                                            vis_dir=os.path.join(self.output, 'tracking_vis'), renderer=self.renderer,
@@ -155,40 +155,45 @@ class Tracker(object):
         H, W, fx, fy, cx, cy = self.H, self.W, self.fx, self.fy, self.cx, self.cy
 
         c2w = cam_pose_to_matrix(cam_pose)
-        batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(self.ignore_edge_H, H-self.ignore_edge_H,
-                                                                                 self.ignore_edge_W, W-self.ignore_edge_W,
-                                                                                 batch_size, H, W, fx, fy, cx, cy, c2w,
-                                                                                 gt_depth, gt_color, device)
+        with torch.cuda.nvtx.range("get_samples"):
+            batch_rays_o, batch_rays_d, batch_gt_depth, batch_gt_color = get_samples(self.ignore_edge_H, H-self.ignore_edge_H,
+                                                                                    self.ignore_edge_W, W-self.ignore_edge_W,
+                                                                                    batch_size, H, W, fx, fy, cx, cy, c2w,
+                                                                                    gt_depth, gt_color, device)
         depth_mask = (batch_gt_depth > 0)
         batch_gt_depth = batch_gt_depth[depth_mask]
         batch_gt_color = batch_gt_color[depth_mask]
         batch_rays_o = batch_rays_o[depth_mask]
         batch_rays_d = batch_rays_d[depth_mask]
-        depth, color, sdf, z_vals, inmap_mask = self.renderer.render_batch_ray(self.submap_list, self.decoders, batch_rays_d, batch_rays_o,
+        with torch.cuda.nvtx.range("render_batch_ray"):
+            depth, color, sdf, z_vals, inmap_mask = self.renderer.render_batch_ray(self.submap_list, self.decoders, batch_rays_d, batch_rays_o,
                                                                    self.device, self.truncation, gt_depth=batch_gt_depth)
 
         ## Filtering the rays for which the rendered depth error is greater than 10 times of the median depth error
-        batch_gt_depth = batch_gt_depth[inmap_mask]
-        batch_gt_color = batch_gt_color[inmap_mask]
+        with torch.cuda.nvtx.range("fillter rays"):
+            batch_gt_depth = batch_gt_depth[inmap_mask]
+            batch_gt_color = batch_gt_color[inmap_mask]
 
-        depth_error = (batch_gt_depth - depth.detach()).abs()
-        depth_error_median = depth_error.median()
-        depth_mask = (depth_error < 20 * depth_error_median)
+            depth_error = (batch_gt_depth - depth.detach()).abs()
+            depth_error_median = depth_error.median()
+            depth_mask = (depth_error < 20 * depth_error_median)
 
-        mask = depth_mask
+            mask = depth_mask
 
-        ## SDF losses
-        loss = self.sdf_losses(sdf[mask], z_vals[mask], batch_gt_depth[mask])
+        with torch.cuda.nvtx.range("Losses"):
+            ## SDF losses
+            loss = self.sdf_losses(sdf[mask], z_vals[mask], batch_gt_depth[mask])
 
-        ## Color Loss
-        loss = loss + self.w_color * torch.square(batch_gt_color[mask] - color[mask]).mean()
+            ## Color Loss
+            loss = loss + self.w_color * torch.square(batch_gt_color[mask] - color[mask]).mean()
 
-        ### Depth loss
-        loss = loss + self.w_depth * torch.square(batch_gt_depth[mask] - depth[mask]).mean()
-
+            ### Depth loss
+            loss = loss + self.w_depth * torch.square(batch_gt_depth[mask] - depth[mask]).mean()
         optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
+        with torch.cuda.nvtx.range("backward"):
+            loss.backward()
+        with torch.cuda.nvtx.range("optimizer_step"):
+            optimizer.step()
 
         return loss.item()
 
@@ -211,9 +216,10 @@ class Tracker(object):
             pbar = tqdm(self.frame_loader, smoothing=0.05)
 
         for idx, gt_color, gt_depth, gt_c2w in pbar:
-            gt_color = gt_color.to(device, non_blocking=True)
-            gt_depth = gt_depth.to(device, non_blocking=True)
-            gt_c2w = gt_c2w.to(device, non_blocking=True)
+            with torch.cuda.nvtx.range("cpu_to_gpu"):
+                gt_color = gt_color.to(device, non_blocking=True)
+                gt_depth = gt_depth.to(device, non_blocking=True)
+                gt_c2w = gt_c2w.to(device, non_blocking=True)
 
             if not self.verbose:
                 pbar.set_description(f"Tracking Frame {idx[0]}")
@@ -240,26 +246,31 @@ class Tracker(object):
             else:
                 if self.const_speed_assumption and idx - 2 >= 0:
                     ## Linear prediction for initialization
-                    pre_poses = torch.stack([self.estimate_c2w_list[idx - 2], pre_c2w.squeeze(0)], dim=0)
-                    pre_poses = matrix_to_cam_pose(pre_poses)
-                    cam_pose = 2 * pre_poses[1:] - pre_poses[0:1]
+                    with torch.cuda.nvtx.range("Linear_prediction pose"):
+                        pre_poses = torch.stack([self.estimate_c2w_list[idx - 2], pre_c2w.squeeze(0)], dim=0)
+                        pre_poses = matrix_to_cam_pose(pre_poses)
+                        cam_pose = 2 * pre_poses[1:] - pre_poses[0:1]
                 else:
                     ## Initialize with the last known pose
-                    cam_pose = matrix_to_cam_pose(pre_c2w)
+                    with torch.cuda.nvtx.range("initialize with last pose"):
+                        cam_pose = matrix_to_cam_pose(pre_c2w)
                 T = torch.nn.Parameter(cam_pose[:, -3:].clone())
                 R = torch.nn.Parameter(cam_pose[:,:4].clone())
                 cam_para_list_T = [T]
                 cam_para_list_R = [R]
-                optimizer_camera = torch.optim.Adam([{'params': cam_para_list_T, 'lr': self.cam_lr_T, 'betas':(0.5, 0.999)},
+                with torch.cuda.nvtx.range("Initialize optimizer"):
+                    optimizer_camera = torch.optim.Adam([{'params': cam_para_list_T, 'lr': self.cam_lr_T, 'betas':(0.5, 0.999)},
                                                      {'params': cam_para_list_R, 'lr': self.cam_lr_R, 'betas':(0.5, 0.999)}])
 
                 current_min_loss = torch.tensor(float('inf')).float().to(device)
                 for cam_iter in range(self.num_cam_iters):
                     cam_pose = torch.cat([R, T], -1)
 
-                    self.visualizer.save_imgs(idx, cam_iter, gt_depth, gt_color, cam_pose, self.submap_list, self.decoders)
+                    with torch.cuda.nvtx.range("save vis imgs"):
+                        self.visualizer.save_imgs(idx, cam_iter, gt_depth, gt_color, cam_pose, self.submap_list, self.decoders)
 
-                    loss = self.optimize_tracking(cam_pose, gt_color, gt_depth, self.tracking_pixels, optimizer_camera)
+                    with torch.cuda.nvtx.range(f"frame={int(idx)}"):
+                        loss = self.optimize_tracking(cam_pose, gt_color, gt_depth, self.tracking_pixels, optimizer_camera)
                     if loss < current_min_loss:
                         current_min_loss = loss
                         candidate_cam_pose = cam_pose.clone().detach()

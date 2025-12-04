@@ -4,6 +4,7 @@ import time
 import torch
 import torch.multiprocessing
 import torch.multiprocessing as mp
+import threading
 
 from src import config
 from src.Mapper import Mapper
@@ -12,7 +13,7 @@ from src.utils.datasets import get_dataset
 from src.utils.Logger import Logger
 from src.utils.Mesher import Mesher
 from src.utils.Renderer import Renderer
-
+import nvtx
 
 mp.set_sharing_strategy('file_system')
 
@@ -62,11 +63,11 @@ class MUTE_SLAM():
         self.submap_dict_list = mp.Manager().list()
         self.submap_bound_list = mp.Manager().list()
 
-        # need to use spawn
-        try:
-            mp.set_start_method('spawn', force=True)
-        except RuntimeError:
-            pass
+        # No need to enforce a multiprocessing start method when using threads.
+        # try:
+        #     mp.set_start_method('spawn', force=True)
+        # except RuntimeError:
+        #     pass
 
         self.frame_reader = get_dataset(cfg, args, self.scale)
         self.n_img = len(self.frame_reader)
@@ -146,8 +147,8 @@ class MUTE_SLAM():
             if self.mapping_first_frame[0] == 1:
                 break
             time.sleep(1)
-
-        self.tracker.run()
+        with torch.cuda.nvtx.range("tracking"):
+            self.tracker.run()
 
     def mapping(self, rank):
         """
@@ -156,23 +157,29 @@ class MUTE_SLAM():
         Args:
             rank (int): Thread ID.
         """
-
-        self.mapper.run()
+        with torch.cuda.nvtx.range("mapping"):
+            self.mapper.run()
 
     def run(self):
         """
-        Dispatch Threads.
+        Run tracking and mapping in two *threads* inside the same process.
+
+        This avoids CUDA shared-memory / IPC issues on Jetson devices while
+        keeping the same "mutually blocking" behaviour the authors described.
         """
-        processes = []
-        for rank in range(0, 2):
-            if rank == 0:
-                p = mp.Process(target=self.tracking, args=(rank, ))
-            elif rank == 1:
-                p = mp.Process(target=self.mapping, args=(rank, ))
-            p.start()
-            processes.append(p)
-        for p in processes:
-            p.join()
+        # Threads share the same 'self', the same CUDA context, and the same
+        # Python process, so Tracker and Mapper still communicate via
+        # self.idx, self.submap_dict_list, self.submap_bound_list, etc.
+        t_tracking = threading.Thread(target=self.tracking, args=(0,), daemon=True)
+        t_mapping  = threading.Thread(target=self.mapping,  args=(1,), daemon=True)
+
+        t_tracking.start()
+        t_mapping.start()
+
+        # Wait for both to finish
+        t_tracking.join()
+        t_mapping.join()
+
 
 
 # This part is required by torch.multiprocessing
