@@ -6,6 +6,8 @@ def get_model(cfg):
     learnable_beta = cfg['rendering']['learnable_beta']
     use_tcnn = cfg['encoding']['tcnn']
     device = cfg['device']
-    decoder = Decoders(device=device, in_dim=in_dim, truncation=truncation, learnable_beta=learnable_beta, use_tcnn=use_tcnn)
+    morton_sort = cfg['encoding'].get('morton_sort', True)
+    morton_R = cfg['encoding'].get('morton_R', 128)
+    decoder = Decoders(device=device, in_dim=in_dim, truncation=truncation, learnable_beta=learnable_beta, use_tcnn=use_tcnn, morton_sort=morton_sort, morton_R=morton_R)
 
     return decoder

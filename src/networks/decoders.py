@@ -3,6 +3,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 from src.common import normalize_3d_coordinate, normalize_3d_coordinate_to_unit
 
+# Morton extension
+from src.fast_morton import morton3d_keys_cuda
+
+@torch.no_grad()
+def morton_permutation_from_points01(pts01: torch.Tensor, R: int = 128) -> torch.Tensor:
+    """
+    pts01: [N, 3], in [0,1]^3 on CUDA
+    returns: permutation indices [N] as torch.long on CUDA
+    """
+    with torch.cuda.nvtx.range("morton_keys"):
+        keys = morton3d_keys_cuda(pts01, R)  # int32
+    with torch.cuda.nvtx.range("morton_argsort"):
+        perm = torch.argsort(keys, stable=False)
+    return perm.to(torch.long)
 
 class Decoders(nn.Module):
     """
@@ -14,7 +28,7 @@ class Decoders(nn.Module):
         n_blocks: number of MLP blocks
         learnable_beta: whether to learn beta
     """
-    def __init__(self, device, in_dim=32, hidden_size=32, truncation=0.08, n_blocks=2, learnable_beta=True, use_tcnn=False):
+    def __init__(self, device, in_dim=32, hidden_size=32, truncation=0.08, n_blocks=2, learnable_beta=True, use_tcnn=False, morton_sort=True, morton_R=128):
         super().__init__()
         self.device = device
         self.in_dim = in_dim
@@ -22,6 +36,10 @@ class Decoders(nn.Module):
         self.n_blocks = n_blocks
         self.bound = torch.empty(3, 2)
         self.use_tcnn = use_tcnn
+
+        ## Morton params
+        self.morton_sort = morton_sort
+        self.morton_R = morton_R
 
         ## layers for SDF decoder
         self.linears = nn.ModuleList(
@@ -80,16 +98,61 @@ class Decoders(nn.Module):
             pts_mask = torch.logical_and(pts_mask, torch.logical_xor(pre_mask, pts_mask))
             #pre_mask = torch.logical_or(pre_mask, pts_mask)
             pre_mask = pts_mask
-            indices_list.append(index[pts_mask])
+
+            # Indices in the flattened pts array
+            indices = index[pts_mask]
+            indices_list.append(indices)
+            pts_sub = pts[pts_mask]   # [N_i, 3]
+
             with torch.cuda.nvtx.range("normalize coords"):
                 if self.use_tcnn:
-                    p_nor = normalize_3d_coordinate_to_unit(pts[pts_mask], submap.boundary)
+                    p_nor = normalize_3d_coordinate_to_unit(pts_sub, submap.boundary)
                 else:
-                    p_nor = normalize_3d_coordinate(pts[pts_mask], submap.boundary)
-            with torch.cuda.nvtx.range("query color feature"):
-                c_feat_list.append(self.sample_plane_feature(p_nor, submap.c_planes_xy, submap.c_planes_xz, submap.c_planes_yz))
-            with torch.cuda.nvtx.range("query geometry feature"):
-                feat_list.append(self.sample_plane_feature(p_nor, submap.planes_xy, submap.planes_xz, submap.planes_yz))
+                    p_nor = normalize_3d_coordinate(pts_sub, submap.boundary)
+
+            # --- Morton sort only in TCNN mode ---
+            if self.use_tcnn and self.morton_sort and p_nor.shape[0] > 0:
+                with torch.cuda.nvtx.range("morton_permutation"):
+                    # p_nor is already in [0,1]^3 in the TCNN path
+                    perm = morton_permutation_from_points01(p_nor, R=self.morton_R)
+
+                p_nor_sorted = p_nor[perm]
+
+                # Query encoders on sorted coordinates
+                with torch.cuda.nvtx.range("query color feature"):
+                    c_feat_sorted = self.sample_plane_feature(
+                        p_nor_sorted,
+                        submap.c_planes_xy, submap.c_planes_xz, submap.c_planes_yz
+                    )
+                with torch.cuda.nvtx.range("query geometry feature"):
+                    feat_sorted = self.sample_plane_feature(
+                        p_nor_sorted,
+                        submap.planes_xy, submap.planes_xz, submap.planes_yz
+                    )
+                with torch.cuda.nvtx.range("Unpermute"):
+                    # Un-permute so that features are back in the original order
+                    c_feat = torch.empty_like(c_feat_sorted)
+                    c_feat[perm] = c_feat_sorted
+
+                    feat = torch.empty_like(feat_sorted)
+                    feat[perm] = feat_sorted
+
+            else:
+                # Original behavior (no Morton or non-TCNN)
+                with torch.cuda.nvtx.range("query color feature"):
+                    c_feat = self.sample_plane_feature(
+                        p_nor,
+                        submap.c_planes_xy, submap.c_planes_xz, submap.c_planes_yz
+                    )
+                with torch.cuda.nvtx.range("query geometry feature"):
+                    feat = self.sample_plane_feature(
+                        p_nor,
+                        submap.planes_xy, submap.planes_xz, submap.planes_yz
+                    )
+
+            c_feat_list.append(c_feat)
+            feat_list.append(feat)
+
         feat_all = torch.zeros((pts.shape[0], feat_list[0].shape[1]), device=self.device)
         c_feat_all = torch.zeros((pts.shape[0], c_feat_list[0].shape[1]), device=self.device)
 

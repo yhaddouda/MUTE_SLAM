@@ -46,6 +46,8 @@ class Tracker(object):
         self.base_resolution = slam.base_resolution
         self.per_level_feature_dim = slam.per_level_feature_dim
         self.use_tcnn = slam.use_tcnn
+        self.hash_type = slam.hash_type
+
 
         self.cam_lr_T = cfg['tracking']['lr_T']
         self.cam_lr_R = cfg['tracking']['lr_R']
@@ -97,7 +99,7 @@ class Tracker(object):
                                            input_dim=2,
                                            num_levels=self.encoding_levels,
                                            level_dim=self.per_level_feature_dim,
-                                           base_resolution=self.base_resolution))
+                                           base_resolution=self.base_resolution, hash_type=self.hash_type))
             self.submap_list[-1].load_state_dict(self.submap_dict_list[len(self.submap_list)-1])
 
     def sdf_losses(self, sdf, z_vals, gt_depth):

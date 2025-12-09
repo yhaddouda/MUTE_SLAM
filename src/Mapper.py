@@ -49,6 +49,8 @@ class Mapper(object):
         self.base_resolution = slam.base_resolution
         self.per_level_feature_dim = slam.per_level_feature_dim
         self.use_tcnn = slam.use_tcnn
+        self.hash_type = slam.hash_type
+
 
         self.estimate_c2w_list = slam.estimate_c2w_list
         self.mapping_first_frame = slam.mapping_first_frame
@@ -517,7 +519,7 @@ class Mapper(object):
                                                         input_dim=2,
                                                         num_levels=self.encoding_levels,
                                                         level_dim=self.per_level_feature_dim,
-                                                        base_resolution=self.base_resolution)
+                                                        base_resolution=self.base_resolution, hash_type=self.hash_type,)
                         self.submap_list.append(cur_submap)
                         state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                         self.submap_dict_list.append(state_dict_cpu)
@@ -541,7 +543,7 @@ class Mapper(object):
                                                         input_dim=2,
                                                         num_levels=self.encoding_levels,
                                                         level_dim=self.per_level_feature_dim,
-                                                        base_resolution=self.base_resolution)
+                                                        base_resolution=self.base_resolution, hash_type=self.hash_type)
                         self.submap_list.append(cur_submap)
                         state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                         self.submap_dict_list.append(state_dict_cpu)
@@ -622,12 +624,15 @@ class Mapper(object):
             if idx == self.n_img-1:
                 for i, submap in enumerate(self.submap_list):
                     print(submap)
-                if self.eval_rec:
-                    mesh_out_file = f'{self.output}/mesh/final_mesh_eval_rec.ply'
-                else:
-                    mesh_out_file = f'{self.output}/mesh/final_mesh.ply'
-                self.mesher.get_mesh(mesh_out_file, self.submap_list, self.decoders, self.keyframe_dict, self.device)
-                cull_mesh(mesh_out_file, self.cfg, self.args, self.device, estimate_c2w_list=self.estimate_c2w_list)
+                # For batch runs, disable mesh extraction, it takes too much time
+                if self.cfg['meshing'].get('save_final_mesh', True):
+                    if self.eval_rec:
+                        mesh_out_file = f'{self.output}/mesh/final_mesh_eval_rec.ply'
+                    else:
+                        mesh_out_file = f'{self.output}/mesh/final_mesh.ply'
+                    
+                    self.mesher.get_mesh(mesh_out_file, self.submap_list, self.decoders, self.keyframe_dict, self.device)
+                    cull_mesh(mesh_out_file, self.cfg, self.args, self.device, estimate_c2w_list=self.estimate_c2w_list)
                 break
 
             if idx == self.n_img-1:

@@ -168,3 +168,4 @@ output/
 external/
 tiny-cuda-nn/
 profiling/
+.torch_extensions/

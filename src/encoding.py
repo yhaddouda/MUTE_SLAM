@@ -4,7 +4,7 @@ import numpy as np
 
 class SubMap(nn.Module):
     def __init__(self, device, boundary, use_tcnn=False, encoding_type='hashgrid',
-                 input_dim=2, num_levels=16, level_dim=2, base_resolution=16, align_corners=True):
+                 input_dim=2, num_levels=16, level_dim=2, base_resolution=16, align_corners=True, hash_type=None):
         super().__init__()
         self.device = device
         self.boundary = boundary.to(self.device)
@@ -29,6 +29,12 @@ class SubMap(nn.Module):
                                          n_features_per_level=level_dim,
                                          log2_hashmap_size=log2_hashmap_size_color, base_resolution=base_resolution,
                                          per_level_scale=per_level_scale_color)
+            
+            # Only set if provided; otherwise let TCNN use its default (CoherentPrime)
+            if hash_type is not None:
+                encoding_dict_sdf["hash"] = hash_type
+                encoding_dict_color["hash"] = hash_type
+
             self.planes_xy = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=torch.float32)
             self.planes_xz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=torch.float32)
             self.planes_yz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=torch.float32)
