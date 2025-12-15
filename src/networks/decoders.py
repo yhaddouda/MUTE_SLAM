@@ -18,6 +18,15 @@ def morton_permutation_from_points01(pts01: torch.Tensor, R: int = 128) -> torch
         perm = torch.argsort(keys, stable=False)
     return perm.to(torch.long)
 
+def _cast_to_mlp_dtype(x, mlp_layers: nn.ModuleList):
+        # pick dtype from the first Linear weight
+        if len(mlp_layers) == 0:
+            return x
+        target_dtype = mlp_layers[0].weight.dtype
+        if x.dtype != target_dtype:
+            x = x.to(dtype=target_dtype)
+        return x
+
 class Decoders(nn.Module):
     """
     Decoders for SDF and RGB.
@@ -254,6 +263,7 @@ class Decoders(nn.Module):
 
         return raw
 
+
     def forward(self, p, submap_list):
         """
         Forward pass
@@ -269,8 +279,10 @@ class Decoders(nn.Module):
             features, c_features = self.get_feature_from_points(p, submap_list)
 
         with torch.cuda.nvtx.range("sdf decoder"):
+            features = _cast_to_mlp_dtype(features, self.linears)
             sdf = self.get_raw_sdf(features)
         with torch.cuda.nvtx.range("rgb decoder"):
+            c_features = _cast_to_mlp_dtype(c_features, self.c_linears)
             rgb = self.get_raw_rgb(c_features)
 
         with torch.cuda.nvtx.range("tensor ops"):

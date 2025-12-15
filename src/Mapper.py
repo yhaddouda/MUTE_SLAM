@@ -50,6 +50,7 @@ class Mapper(object):
         self.per_level_feature_dim = slam.per_level_feature_dim
         self.use_tcnn = slam.use_tcnn
         self.hash_type = slam.hash_type
+        self.tcnn_dtype = slam.tcnn_dtype
 
 
         self.estimate_c2w_list = slam.estimate_c2w_list
@@ -519,7 +520,7 @@ class Mapper(object):
                                                         input_dim=2,
                                                         num_levels=self.encoding_levels,
                                                         level_dim=self.per_level_feature_dim,
-                                                        base_resolution=self.base_resolution, hash_type=self.hash_type,)
+                                                        base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype)
                         self.submap_list.append(cur_submap)
                         state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                         self.submap_dict_list.append(state_dict_cpu)
@@ -543,7 +544,7 @@ class Mapper(object):
                                                         input_dim=2,
                                                         num_levels=self.encoding_levels,
                                                         level_dim=self.per_level_feature_dim,
-                                                        base_resolution=self.base_resolution, hash_type=self.hash_type)
+                                                        base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype)
                         self.submap_list.append(cur_submap)
                         state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                         self.submap_dict_list.append(state_dict_cpu)
@@ -573,7 +574,7 @@ class Mapper(object):
                                                     input_dim=2,
                                                     num_levels=self.encoding_levels,
                                                     level_dim=self.per_level_feature_dim,
-                                                    base_resolution=self.base_resolution))
+                                                    base_resolution=self.base_resolution, tcnn_dtype=self.tcnn_dtype))
                     state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                     self.submap_dict_list.append(state_dict_cpu)
                     self.submap_bound_list.append(boundary.to('cpu'))

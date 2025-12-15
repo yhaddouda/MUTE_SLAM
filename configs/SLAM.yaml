@@ -12,6 +12,7 @@ encoding:
   hash: Morton  # Options: "ReversedPrime", "Rng", "BaseConvert", "Morton", "CoherentPrime"
   morton_sort: True
   morton_R: 128
+  tcnn_dtype: fp16   # or fp16
 meshing:
   level_set: 0
   resolution: 0.01 #cm # Increase this number to speed up meshing algorithm

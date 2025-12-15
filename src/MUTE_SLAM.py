@@ -60,6 +60,9 @@ class MUTE_SLAM():
         self.base_resolution = cfg['encoding']['base_resolution']
         self.per_level_feature_dim = cfg['encoding']['feature_dim']
 
+        # fp16 or fp32 for tcnn encodings
+        self.tcnn_dtype = cfg['encoding'].get('tcnn_dtype', 'fp32')  # default = original behavior
+
         # Hash function 
         self.hash_type = cfg['encoding'].get('hash', None)  # default None => TCNN default (CoherentPrime)
 
@@ -71,7 +74,7 @@ class MUTE_SLAM():
         print(f"[MUTE-SLAM] Morton sort is {morton_status} "
             f"(tcnn={self.use_tcnn}, morton_sort={self.morton_sort})")
         print(f"[Hash function] {self.hash_type}")
-
+        print(f"[Hashgrid precision] {self.tcnn_dtype}")
 
         self.submap_dict_list = mp.Manager().list()
         self.submap_bound_list = mp.Manager().list()

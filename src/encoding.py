@@ -4,10 +4,21 @@ import numpy as np
 
 class SubMap(nn.Module):
     def __init__(self, device, boundary, use_tcnn=False, encoding_type='hashgrid',
-                 input_dim=2, num_levels=16, level_dim=2, base_resolution=16, align_corners=True, hash_type=None):
+                 input_dim=2, num_levels=16, level_dim=2, base_resolution=16, align_corners=True, hash_type=None , tcnn_dtype=None):
         super().__init__()
         self.device = device
         self.boundary = boundary.to(self.device)
+
+        if isinstance(tcnn_dtype, str):
+            _k = tcnn_dtype.lower()
+            if _k in ["fp16", "float16", "half"]:
+                tcnn_dtype_torch = torch.float16
+            elif _k in ["fp32", "float32"]:
+                tcnn_dtype_torch = torch.float32
+            else:
+                raise ValueError(f"Unknown tcnn_dtype={tcnn_dtype}. Use fp16 or fp32.")
+        else:
+            tcnn_dtype_torch = tcnn_dtype
 
         with torch.no_grad():
             edge_length = self.boundary[1] - self.boundary[0]
@@ -35,12 +46,12 @@ class SubMap(nn.Module):
                 encoding_dict_sdf["hash"] = hash_type
                 encoding_dict_color["hash"] = hash_type
 
-            self.planes_xy = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=torch.float32)
-            self.planes_xz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=torch.float32)
-            self.planes_yz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=torch.float32)
-            self.c_planes_xy = tcnn.Encoding(input_dim, encoding_config=encoding_dict_color, dtype=torch.float32)
-            self.c_planes_xz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_color, dtype=torch.float32)
-            self.c_planes_yz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_color, dtype=torch.float32)
+            self.planes_xy = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=tcnn_dtype_torch)
+            self.planes_xz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=tcnn_dtype_torch)
+            self.planes_yz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_sdf, dtype=tcnn_dtype_torch)
+            self.c_planes_xy = tcnn.Encoding(input_dim, encoding_config=encoding_dict_color, dtype=tcnn_dtype_torch)
+            self.c_planes_xz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_color, dtype=tcnn_dtype_torch)
+            self.c_planes_yz = tcnn.Encoding(input_dim, encoding_config=encoding_dict_color, dtype=tcnn_dtype_torch)
 
         else:
             self.planes_xy, _ = get_encoder(encoding_type, input_dim,
