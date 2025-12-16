@@ -162,14 +162,25 @@ class Decoders(nn.Module):
             c_feat_list.append(c_feat)
             feat_list.append(feat)
 
-        feat_all = torch.zeros((pts.shape[0], feat_list[0].shape[1]), device=self.device)
-        c_feat_all = torch.zeros((pts.shape[0], c_feat_list[0].shape[1]), device=self.device)
+        # allocate outputs with the same dtype as the produced features (fp16 or fp32)
+        feat_dtype = feat_list[0].dtype
+        c_feat_dtype = c_feat_list[0].dtype
+
+        feat_all = torch.zeros((pts.shape[0], feat_list[0].shape[1]), device=self.device, dtype=feat_dtype)
+        c_feat_all = torch.zeros((pts.shape[0], c_feat_list[0].shape[1]), device=self.device, dtype=c_feat_dtype)
 
         for feat, c_feat, indices in zip(feat_list, c_feat_list, indices_list):
+            # index_put_ requires exact dtype match
+            if feat.dtype != feat_all.dtype:
+                feat = feat.to(feat_all.dtype)
+            if c_feat.dtype != c_feat_all.dtype:
+                c_feat = c_feat.to(c_feat_all.dtype)
+
             feat_all.index_put_((indices,), feat)
             c_feat_all.index_put_((indices,), c_feat)
 
         return feat_all, c_feat_all
+
 
     def get_feature_from_points_for_mesher(self, pts, submap_list):
         """

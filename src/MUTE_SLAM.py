@@ -69,12 +69,18 @@ class MUTE_SLAM():
         # Read morton flag from config (or default)
         self.morton_sort = cfg['encoding'].get('morton_sort', True)
 
+        # log2_hashmap_size overrides
+        self.log2_hashmap_size_sdf = cfg['encoding'].get('log2_hashmap_size_sdf', None)  # default None => automatic
+        self.log2_hashmap_size_color = cfg['encoding'].get('log2_hashmap_size_color', None)  # default None => automatic
+
         # Single startup print
         morton_status = "ON" if (self.use_tcnn and self.morton_sort) else "OFF"
         print(f"[MUTE-SLAM] Morton sort is {morton_status} "
             f"(tcnn={self.use_tcnn}, morton_sort={self.morton_sort})")
         print(f"[Hash function] {self.hash_type}")
         print(f"[Hashgrid precision] {self.tcnn_dtype}")
+        print(f"[log2_hashmap_size_sdf] {self.log2_hashmap_size_sdf}")
+        print(f"[log2_hashmap_size_color] {self.log2_hashmap_size_color}")
 
         self.submap_dict_list = mp.Manager().list()
         self.submap_bound_list = mp.Manager().list()

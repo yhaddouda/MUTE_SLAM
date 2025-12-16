@@ -51,7 +51,8 @@ class Mapper(object):
         self.use_tcnn = slam.use_tcnn
         self.hash_type = slam.hash_type
         self.tcnn_dtype = slam.tcnn_dtype
-
+        self.log2_hashmap_size_sdf = slam.log2_hashmap_size_sdf
+        self.log2_hashmap_size_color = slam.log2_hashmap_size_color
 
         self.estimate_c2w_list = slam.estimate_c2w_list
         self.mapping_first_frame = slam.mapping_first_frame
@@ -520,7 +521,7 @@ class Mapper(object):
                                                         input_dim=2,
                                                         num_levels=self.encoding_levels,
                                                         level_dim=self.per_level_feature_dim,
-                                                        base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype)
+                                                        base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype, log2_hashmap_size_sdf_override=self.log2_hashmap_size_sdf, log2_hashmap_size_color_override=self.log2_hashmap_size_color)
                         self.submap_list.append(cur_submap)
                         state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                         self.submap_dict_list.append(state_dict_cpu)
@@ -544,7 +545,7 @@ class Mapper(object):
                                                         input_dim=2,
                                                         num_levels=self.encoding_levels,
                                                         level_dim=self.per_level_feature_dim,
-                                                        base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype)
+                                                        base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype, log2_hashmap_size_sdf_override=self.log2_hashmap_size_sdf, log2_hashmap_size_color_override=self.log2_hashmap_size_color)
                         self.submap_list.append(cur_submap)
                         state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                         self.submap_dict_list.append(state_dict_cpu)
@@ -574,7 +575,7 @@ class Mapper(object):
                                                     input_dim=2,
                                                     num_levels=self.encoding_levels,
                                                     level_dim=self.per_level_feature_dim,
-                                                    base_resolution=self.base_resolution, tcnn_dtype=self.tcnn_dtype))
+                                                    base_resolution=self.base_resolution, tcnn_dtype=self.tcnn_dtype, hash_type=self.hash_type, log2_hashmap_size_sdf_override=self.log2_hashmap_size_sdf, log2_hashmap_size_color_override=self.log2_hashmap_size_color))
                     state_dict_cpu = {key: value.to('cpu') for key, value in self.submap_list[-1].state_dict().items()}
                     self.submap_dict_list.append(state_dict_cpu)
                     self.submap_bound_list.append(boundary.to('cpu'))

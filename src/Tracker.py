@@ -48,6 +48,8 @@ class Tracker(object):
         self.use_tcnn = slam.use_tcnn
         self.hash_type = slam.hash_type
         self.tcnn_dtype = slam.tcnn_dtype
+        self.log2_hashmap_size_sdf = slam.log2_hashmap_size_sdf
+        self.log2_hashmap_size_color = slam.log2_hashmap_size_color
 
         self.cam_lr_T = cfg['tracking']['lr_T']
         self.cam_lr_R = cfg['tracking']['lr_R']
@@ -99,7 +101,7 @@ class Tracker(object):
                                            input_dim=2,
                                            num_levels=self.encoding_levels,
                                            level_dim=self.per_level_feature_dim,
-                                           base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype))
+                                           base_resolution=self.base_resolution, hash_type=self.hash_type, tcnn_dtype=self.tcnn_dtype, log2_hashmap_size_sdf_override=self.log2_hashmap_size_sdf, log2_hashmap_size_color_override=self.log2_hashmap_size_color))
             self.submap_list[-1].load_state_dict(self.submap_dict_list[len(self.submap_list)-1])
 
     def sdf_losses(self, sdf, z_vals, gt_depth):

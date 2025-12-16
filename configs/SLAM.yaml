@@ -13,6 +13,8 @@ encoding:
   morton_sort: True
   morton_R: 128
   tcnn_dtype: fp16   # or fp16
+  log2_hashmap_size_sdf: 19      # number (13-24) or null to keep auto
+  log2_hashmap_size_color: 19    # number (13-24) or null to keep auto
 meshing:
   level_set: 0
   resolution: 0.01 #cm # Increase this number to speed up meshing algorithm

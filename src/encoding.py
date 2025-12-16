@@ -4,7 +4,7 @@ import numpy as np
 
 class SubMap(nn.Module):
     def __init__(self, device, boundary, use_tcnn=False, encoding_type='hashgrid',
-                 input_dim=2, num_levels=16, level_dim=2, base_resolution=16, align_corners=True, hash_type=None , tcnn_dtype=None):
+                 input_dim=2, num_levels=16, level_dim=2, base_resolution=16, align_corners=True, hash_type=None , tcnn_dtype=None, log2_hashmap_size_sdf_override=None, log2_hashmap_size_color_override=None):
         super().__init__()
         self.device = device
         self.boundary = boundary.to(self.device)
@@ -30,6 +30,13 @@ class SubMap(nn.Module):
                 np.log2(desired_resolution_sdf / base_resolution) / (num_levels - 1))
             per_level_scale_color = np.exp2(
                 np.log2(desired_resolution_color / base_resolution) / (num_levels - 1))
+            
+        # manual override (if provided)
+        if log2_hashmap_size_sdf_override is not None:
+            log2_hashmap_size_sdf = int(log2_hashmap_size_sdf_override)
+        if log2_hashmap_size_color_override is not None:
+            log2_hashmap_size_color = int(log2_hashmap_size_color_override)
+            
         if use_tcnn:
             import tinycudann as tcnn
             encoding_dict_sdf = dict(n_levels=num_levels, otype=encoding_type,
