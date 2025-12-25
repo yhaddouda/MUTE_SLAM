@@ -1,5 +1,5 @@
 inherit_from: configs/Replica/replica.yaml
 data:
   input_folder: ../data/Replica/office1
-  output: output/Replica/office1/7
+  output: output/Replica/office1/sweeps
   

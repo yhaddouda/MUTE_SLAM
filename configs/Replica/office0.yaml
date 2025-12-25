@@ -1,6 +1,6 @@
 inherit_from: configs/Replica/replica.yaml
 data:
   input_folder: ../data/Replica/office0
-  output: output/Replica/office0/7
+  output: output/Replica/office0/morton_20
 mapping:
   map_expand_size: 1.2

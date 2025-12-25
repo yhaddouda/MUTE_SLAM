@@ -1,4 +1,4 @@
 inherit_from: configs/Replica/replica.yaml
 data:
   input_folder: Datasets/Replica/room0
-  output: output/Replica/room0/7
+  output: output/Replica/room0/sweeps

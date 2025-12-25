@@ -1,7 +1,6 @@
 
 # Annotated code with nvtx, then the following command : 
-sudo nsys profile   --trace cuda,osrt,nvtx,cudnn,cublas   --gpu-metrics-devices all   --cuda-memory-usage true  --duration 130 --force-overwrite true --output profile_cfgA   /bin/b
-ash /home/yh279050/work/MUTE_SLAM/Orin/running\ profiling/profile_muteslam.sh  configs/Replica/office0.yaml
+sudo /usr/local/cuda/bin/ncu --target-processes all    --kernel-name-base function  --kernel-name "regex:.*(grid|sgemm).*" --launch-count 500  --section MemoryWorkloadAnalysis     --section SourceCounters     --section SpeedOfLight     -f     --export mute_19_fp16_office0_cfgA     /bin/bash /home/yh279050/work/MUTE_SLAM/Orin/running\ profiling/profile_muteslam.sh  configs/Replica/office0.yaml
 
 --> profile_muteslam.sh  : important for running cuda morton optimised code, because it tells nsight where to look for the libs and sets the envs variables in conda and not sudo, this requires that the cache already exists in the project folder after a first build
 

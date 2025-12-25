@@ -1,6 +1,6 @@
 inherit_from: configs/Replica/replica.yaml
 data:
   input_folder: Datasets/Replica/office4
-  output: output/Replica/office4/7
+  output: output/Replica/office4/sweeps
 mapping:
   map_expand_size: 1.2

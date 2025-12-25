@@ -9,17 +9,18 @@ encoding:
   n_levels: 16
   base_resolution: 16
   feature_dim: 2
-  hash: Morton  # Options: "ReversedPrime", "Rng", "BaseConvert", "Morton", "CoherentPrime"
-  morton_sort: True
+  hash: CoherentPrime  # Options: "ReversedPrime", "Rng", "BaseConvert", "Morton", "CoherentPrime"
+  morton_sort: False
   morton_R: 128
-  tcnn_dtype: fp16   # or fp16
-  log2_hashmap_size_sdf: 19      # number (13-24) or null to keep auto
-  log2_hashmap_size_color: 19    # number (13-24) or null to keep auto
+  tcnn_dtype: fp32   # or fp16
+  log2_hashmap_size_sdf: 20      # number (13-24) or null to keep auto
+  log2_hashmap_size_color: 20    # number (13-24) or null to keep auto
 meshing:
   level_set: 0
   resolution: 0.01 #cm # Increase this number to speed up meshing algorithm
   eval_rec: False
   mesh_bound_scale: 1.02
+  save_final_mesh: False
 tracking:
   ignore_edge_W: 75
   ignore_edge_H: 75
